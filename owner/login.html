@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Owner Login | Local Shop Platform</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <main class="page-center">
+    <section class="auth-card">
+      <div class="brand">
+        <h1>Owner Login</h1>
+        <p>Local Shop Platform</p>
+      </div>
+
+      <form id="loginForm">
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input id="email" type="email" autocomplete="email" required placeholder="owner@example.com">
+        </div>
+
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password" required placeholder="Enter password">
+        </div>
+
+        <button id="loginButton" class="primary-btn" type="submit">Login</button>
+        <div id="message" class="message hidden"></div>
+      </form>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="../js/supabase.js"></script>
+  <script>
+    const form = document.getElementById("loginForm");
+    const button = document.getElementById("loginButton");
+    const message = document.getElementById("message");
+
+    function showMessage(text) {
+      message.textContent = text;
+      message.classList.remove("hidden");
+    }
+
+    async function checkExistingSession() {
+      const { data, error } = await supabaseClient.auth.getSession();
+      if (error || !data.session) return;
+
+      const user = data.session.user;
+
+      const { data: profile, error: profileError } = await supabaseClient
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (profileError) return;
+
+      if (profile && profile.role === "owner") {
+        window.location.href = "./dashboard.html";
+      }
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      message.classList.add("hidden");
+      button.disabled = true;
+      button.textContent = "Signing in...";
+
+      try {
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("password").value;
+
+        const { data, error } = await supabaseClient.auth.signInWithPassword({
+          email,
+          password
+        });
+
+        if (error) throw error;
+
+        const user = data.user;
+
+        const { data: profile, error: profileError } = await supabaseClient
+          .from("profiles")
+          .select("full_name, role")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (profileError) throw profileError;
+
+        if (!profile || profile.role !== "owner") {
+          await supabaseClient.auth.signOut();
+          throw new Error("This account is not registered as a shop owner.");
+        }
+
+        const { data: membership, error: membershipError } = await supabaseClient
+          .from("shop_members")
+          .select("shop_id, role")
+          .eq("user_id", user.id)
+          .eq("role", "owner")
+          .limit(1)
+          .maybeSingle();
+
+        if (membershipError) throw membershipError;
+
+        if (!membership) {
+          await supabaseClient.auth.signOut();
+          throw new Error("No shop is assigned to this owner account.");
+        }
+
+        window.location.href = "./dashboard.html";
+      } catch (error) {
+        console.error("Owner login error:", error);
+        showMessage(error.message || "Login failed. Please try again.");
+      } finally {
+        button.disabled = false;
+        button.textContent = "Login";
+      }
+    });
+
+    checkExistingSession();
+  </script>
+</body>
+</html>
