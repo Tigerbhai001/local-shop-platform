@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Owner Dashboard | Local Shop Platform</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div id="app" class="dashboard-shell hidden">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <h1>Owner Dashboard</h1>
+        <p id="ownerName">Loading...</p>
+      </div>
+      <button id="logoutButton" class="secondary-btn">Logout</button>
+    </header>
+
+    <main class="dashboard-main">
+      <div class="page-heading">
+        <h2>Dashboard</h2>
+        <p>Your shop overview</p>
+      </div>
+
+      <section class="shop-banner">
+        <strong id="shopName">Loading shop...</strong>
+        <span id="shopAddress"></span>
+      </section>
+
+      <section class="stats-grid">
+        <article class="stat-card">
+          <div class="label">Today's Orders</div>
+          <div id="todayOrders" class="value">—</div>
+        </article>
+        <article class="stat-card">
+          <div class="label">Today's Revenue</div>
+          <div id="todayRevenue" class="value">—</div>
+        </article>
+        <article class="stat-card">
+          <div class="label">Total Orders</div>
+          <div id="totalOrders" class="value">—</div>
+        </article>
+        <article class="stat-card">
+          <div class="label">Products</div>
+          <div id="totalProducts" class="value">—</div>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">Recent Orders</div>
+        <div id="ordersState" class="loading">Loading orders...</div>
+        <div id="ordersTableWrap" class="table-wrap hidden">
+          <table>
+            <thead>
+              <tr>
+                <th>Order</th>
+                <th>Customer</th>
+                <th>Phone</th>
+                <th>Status</th>
+                <th>Total</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody id="ordersBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="fatalError" class="page-center hidden">
+    <section class="auth-card">
+      <div class="brand">
+        <h1>Dashboard Error</h1>
+        <p id="fatalMessage"></p>
+      </div>
+      <button class="secondary-btn" onclick="window.location.href='./login.html'">Back to Login</button>
+    </section>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="../js/supabase.js"></script>
+  <script>
+    const app = document.getElementById("app");
+    const fatalError = document.getElementById("fatalError");
+    const fatalMessage = document.getElementById("fatalMessage");
+
+    function showFatal(message) {
+      app.classList.add("hidden");
+      fatalMessage.textContent = message;
+      fatalError.classList.remove("hidden");
+    }
+
+    function money(value) {
+      return "₹" + Number(value || 0).toLocaleString("en-IN", {
+        maximumFractionDigits: 2
+      });
+    }
+
+    function formatDate(value) {
+      if (!value) return "—";
+      return new Date(value).toLocaleString("en-IN", {
+        dateStyle: "medium",
+        timeStyle: "short"
+      });
+    }
+
+    function isToday(value) {
+      const date = new Date(value);
+      const now = new Date();
+      return date.getFullYear() === now.getFullYear()
+        && date.getMonth() === now.getMonth()
+        && date.getDate() === now.getDate();
+    }
+
+    async function loadDashboard() {
+      const { data: sessionData, error: sessionError } =
+        await supabaseClient.auth.getSession();
+
+      if (sessionError) throw sessionError;
+      if (!sessionData.session) {
+        window.location.href = "./login.html";
+        return;
+      }
+
+      const user = sessionData.session.user;
+
+      const { data: profile, error: profileError } = await supabaseClient
+        .from("profiles")
+        .select("full_name, role")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (profileError) throw profileError;
+      if (!profile || profile.role !== "owner") {
+        await supabaseClient.auth.signOut();
+        window.location.href = "./login.html";
+        return;
+      }
+
+      document.getElementById("ownerName").textContent =
+        profile.full_name || user.email || "Owner";
+
+      const { data: membership, error: membershipError } =
+        await supabaseClient
+          .from("shop_members")
+          .select("shop_id")
+          .eq("user_id", user.id)
+          .eq("role", "owner")
+          .limit(1)
+          .maybeSingle();
+
+      if (membershipError) throw membershipError;
+      if (!membership) throw new Error("No shop is assigned to this owner.");
+
+      const shopId = membership.shop_id;
+
+      const [
+        { data: shop, error: shopError },
+        { data: orders, error: ordersError },
+        { count: productCount, error: productsError }
+      ] = await Promise.all([
+        supabaseClient
+          .from("shops")
+          .select("name, address_line1, city, state, pincode")
+          .eq("id", shopId)
+          .maybeSingle(),
+
+        supabaseClient
+          .from("orders")
+          .select("id, order_number, customer_name, customer_phone, status, total_amount, created_at")
+          .eq("shop_id", shopId)
+          .order("created_at", { ascending: false })
+          .limit(20),
+
+        supabaseClient
+          .from("products")
+          .select("id", { count: "exact", head: true })
+          .eq("shop_id", shopId)
+      ]);
+
+      if (shopError) throw shopError;
+      if (ordersError) throw ordersError;
+      if (productsError) throw productsError;
+
+      document.getElementById("shopName").textContent =
+        shop?.name || "Your Shop";
+
+      const address = [
+        shop?.address_line1,
+        shop?.city,
+        shop?.state,
+        shop?.pincode
+      ].filter(Boolean).join(", ");
+
+      document.getElementById("shopAddress").textContent = address;
+
+      const allOrders = orders || [];
+      const todaysOrders = allOrders.filter(order => isToday(order.created_at));
+      const todayRevenue = todaysOrders.reduce(
+        (sum, order) => sum + Number(order.total_amount || 0),
+        0
+      );
+
+      document.getElementById("todayOrders").textContent = todaysOrders.length;
+      document.getElementById("todayRevenue").textContent = money(todayRevenue);
+      document.getElementById("totalOrders").textContent = allOrders.length;
+      document.getElementById("totalProducts").textContent = productCount ?? 0;
+
+      const body = document.getElementById("ordersBody");
+      const state = document.getElementById("ordersState");
+      const table = document.getElementById("ordersTableWrap");
+
+      body.innerHTML = "";
+
+      if (!allOrders.length) {
+        state.textContent = "No orders yet.";
+        state.classList.remove("hidden");
+        table.classList.add("hidden");
+      } else {
+        state.classList.add("hidden");
+        table.classList.remove("hidden");
+
+        for (const order of allOrders) {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td>#${order.order_number ?? "—"}</td>
+            <td>${escapeHtml(order.customer_name || "—")}</td>
+            <td>${escapeHtml(order.customer_phone || "—")}</td>
+            <td><span class="status">${escapeHtml(order.status || "—")}</span></td>
+            <td>${money(order.total_amount)}</td>
+            <td>${formatDate(order.created_at)}</td>
+          `;
+          body.appendChild(row);
+        }
+      }
+
+      app.classList.remove("hidden");
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    document.getElementById("logoutButton").addEventListener("click", async () => {
+      await supabaseClient.auth.signOut();
+      window.location.href = "./login.html";
+    });
+
+    loadDashboard().catch((error) => {
+      console.error("Dashboard error:", error);
+      showFatal(error.message || "Unable to load dashboard.");
+    });
+  </script>
+</body>
+</html>
